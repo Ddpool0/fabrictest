@@ -150,4 +150,21 @@ public class TestOrg {
         return userMap.get(name);
     }
 
+    @Override
+    public String toString() {
+        return "TestOrg{" +
+                "name='" + name + '\'' +
+                ", mspid='" + mspid + '\'' +
+                ", domainName='" + domainName + '\'' +
+                ", admin=" + admin +
+                ", peerAdmin=" + peerAdmin +
+                ", hfcaClient=" + hfcaClient +
+                ", caName='" + caName + '\'' +
+                ", caLocation='" + caLocation + '\'' +
+                ", caProperties=" + caProperties +
+                ", userMap=" + userMap +
+                ", peerLocations=" + peerLocations +
+                ", ordererLocations=" + ordererLocations +
+                '}';
+    }
 }

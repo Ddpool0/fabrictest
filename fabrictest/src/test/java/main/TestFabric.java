@@ -1,8 +1,10 @@
 package main;
 
 import config.TestUtils;
+import entity.TestEnrollment;
 import entity.TestOrg;
 import entity.TestUser;
+import org.apache.commons.io.IOUtils;
 import org.hyperledger.fabric.sdk.exception.CryptoException;
 import org.hyperledger.fabric.sdk.security.CryptoSuite;
 import org.hyperledger.fabric_ca.sdk.HFCAClient;
@@ -14,10 +16,16 @@ import org.hyperledger.fabric_ca.sdk.exception.InvalidArgumentException;
 import org.junit.Before;
 import org.junit.Test;
 
+import java.io.File;
+import java.io.FileInputStream;
 import java.lang.reflect.InvocationTargetException;
 import java.net.MalformedURLException;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.security.PrivateKey;
 import java.util.Collection;
 
+import static java.lang.String.format;
 import static org.junit.Assert.assertNotNull;
 
 public class TestFabric {
@@ -74,18 +82,45 @@ public class TestFabric {
             HFCAInfo info = ca.info();
             assertNotNull(info);
 
+            //为admin生成公私钥对
             TestUser admin = new TestUser("admin");
             admin.setEnrollment(ca.enroll(admin.getName(), "adminpw"));
             admin.setMspid(mspid);
+            testOrg.setAdmin(admin);
 
-
+            //为user1生成公私钥对
             TestUser user = new TestUser("user1");
             RegistrationRequest rr = new RegistrationRequest(user.getName(), "org1.department1");
+            //由上面声明的admin去执行register请求
             String user1Secret = ca.register(rr, admin);
-            user.setEnrollment(ca.enroll(user.getName(),user1Secret));
+            user.setEnrollment(ca.enroll(user.getName(), user1Secret));
             user.setMspid(mspid);
+            testOrg.addUser(user);
 
+            //创建peerAdmin
+            TestUser peerOrgAdmin = new TestUser("peerOrg1Admin");
+            peerOrgAdmin.setMspid(testOrg.getMspid());
 
+            //获取fabric生成的证书
+            File certificateFile = Paths.get("src\\test\\resources\\crypto-config\\peerOrganizations\\", testOrg.getDomainName(), format("\\users\\Admin@%s\\msp\\signcerts\\Admin@%s-cert.pem", testOrg.getDomainName(), testOrg.getDomainName())).toFile();
+            if (!certificateFile.exists()) {
+                System.out.println(testOrg.getDomainName() + "'s" + "certificateFile not find");
+                return;
+            }
+
+            String certificate = new String(IOUtils.toByteArray(new FileInputStream(certificateFile)), "UTF-8");
+
+            //获取fabric生成的私钥
+            File baseSK=Paths.get("src\\test\\resources\\crypto-config\\peerOrganizations\\",testOrg.getDomainName(),format("\\users\\Admin@%s\\msp\\keystore",testOrg.getDomainName())).toFile();
+            File privateKeyFile=TestUtils.findFileSK(baseSK);
+            //转换成PrivateKey类型
+            PrivateKey privateKey=TestUtils.getPrivateKeyFromBytes(IOUtils.toByteArray(new FileInputStream(privateKeyFile)));
+
+            //设置公私钥
+            peerOrgAdmin.setEnrollment(new TestEnrollment(privateKey,certificate));
+            testOrg.setPeerAdmin(peerOrgAdmin);
         }
     }
+
+
 }

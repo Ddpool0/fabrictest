@@ -1,10 +1,22 @@
 package config;
 
 import entity.TestOrg;
+import org.bouncycastle.asn1.pkcs.PrivateKeyInfo;
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
+import org.bouncycastle.openssl.PEMParser;
+import org.bouncycastle.openssl.jcajce.JcaPEMKeyConverter;
 import org.hyperledger.fabric.sdk.helper.Config;
 
+import java.io.File;
+import java.io.IOException;
+import java.io.Reader;
+import java.io.StringReader;
 import java.lang.reflect.Field;
+import java.security.PrivateKey;
+import java.security.Security;
 import java.util.*;
+
+import static java.lang.String.format;
 
 //配置类，使用单例模式。
 public class TestUtils {
@@ -23,6 +35,16 @@ public class TestUtils {
 
     //组织信息
     private final HashMap<String, TestOrg> testOrgs = new HashMap<String, TestOrg>();
+
+    //没有这个静态快，转换PrivateKey时会报错
+    //error：java.security.NoSuchProviderException: no such provider: BC
+    static{
+        try{
+            Security.addProvider(new BouncyCastleProvider());
+        }catch(Exception e){
+            e.printStackTrace();
+        }
+    }
 
     //单例模式，私有构造函数，在此函数中配置组织信息。
     private TestUtils() {
@@ -117,5 +139,36 @@ public class TestUtils {
     //获取配置好的组织集合
     public Collection<TestOrg> getTestOrgs(){
         return Collections.unmodifiableCollection(testOrgs.values());
+    }
+
+    //获取结尾为_sk的文件
+    public static File findFileSK(File directory){
+        //刷选以“_sk”结尾的文件
+        File[] matches=directory.listFiles((dir,name)->name.endsWith("_sk"));
+
+        if (null == matches) {
+            throw new RuntimeException(format("Matches returned null does %s directory exist?", directory.getAbsoluteFile().getName()));
+        }
+
+        if (matches.length != 1) {
+            throw new RuntimeException(format("Expected in %s only 1 sk file but found %d", directory.getAbsoluteFile().getName(), matches.length));
+        }
+
+        return matches[0];
+    }
+
+    //转换成PrivateKey类型
+    public static PrivateKey getPrivateKeyFromBytes(byte[] date) throws IOException {
+
+        final Reader pemReader=new StringReader(new String(date));
+
+        final PrivateKeyInfo pemPair;
+
+        try(PEMParser pemParser=new PEMParser(pemReader)){
+            pemPair= (PrivateKeyInfo) pemParser.readObject();
+        }
+
+        PrivateKey privateKey = new JcaPEMKeyConverter().setProvider(BouncyCastleProvider.PROVIDER_NAME).getPrivateKey(pemPair);
+        return privateKey;
     }
 }
