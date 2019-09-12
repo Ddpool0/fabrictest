@@ -12,6 +12,7 @@ import java.io.IOException;
 import java.io.Reader;
 import java.io.StringReader;
 import java.lang.reflect.Field;
+import java.nio.file.Paths;
 import java.security.PrivateKey;
 import java.security.Security;
 import java.util.*;
@@ -25,7 +26,7 @@ public class TestUtils {
     private static TestUtils testUtils;
 
     //设置连接的ip
-    private static final String LOCALHOST = "192.168.197.147";
+    private static final String LOCALHOST = "192.168.197.124";
 
     //设置组织配置前缀名
     private static final String INTEGRATIONTESTS_ORG = "hyperledger.fabric.org.";
@@ -38,10 +39,10 @@ public class TestUtils {
 
     //没有这个静态快，转换PrivateKey时会报错
     //error：java.security.NoSuchProviderException: no such provider: BC
-    static{
-        try{
+    static {
+        try {
             Security.addProvider(new BouncyCastleProvider());
-        }catch(Exception e){
+        } catch (Exception e) {
             e.printStackTrace();
         }
     }
@@ -124,27 +125,27 @@ public class TestUtils {
     public static void resetConfig() {
         try {
             //获取指定名称的属性
-            final Field field= Config.class.getDeclaredField("config");
+            final Field field = Config.class.getDeclaredField("config");
             //设置访问权限，原来属性为private
             field.setAccessible(true);
             //将此属性设值为null，单例模式实例为null，获取实例时重新实例化
-            field.set(Config.class,null);
+            field.set(Config.class, null);
             //重新实例化，属性config重新赋值，相当于配置初始化。
             Config.getConfig();
         } catch (Exception e) {
-            throw new RuntimeException("Cannot reset config",e);
+            throw new RuntimeException("Cannot reset config", e);
         }
     }
 
     //获取配置好的组织集合
-    public Collection<TestOrg> getTestOrgs(){
+    public Collection<TestOrg> getTestOrgs() {
         return Collections.unmodifiableCollection(testOrgs.values());
     }
 
     //获取结尾为_sk的文件
-    public static File findFileSK(File directory){
+    public static File findFileSK(File directory) {
         //刷选以“_sk”结尾的文件
-        File[] matches=directory.listFiles((dir,name)->name.endsWith("_sk"));
+        File[] matches = directory.listFiles((dir, name) -> name.endsWith("_sk"));
 
         if (null == matches) {
             throw new RuntimeException(format("Matches returned null does %s directory exist?", directory.getAbsoluteFile().getName()));
@@ -160,15 +161,87 @@ public class TestUtils {
     //转换成PrivateKey类型
     public static PrivateKey getPrivateKeyFromBytes(byte[] date) throws IOException {
 
-        final Reader pemReader=new StringReader(new String(date));
+        final Reader pemReader = new StringReader(new String(date));
 
         final PrivateKeyInfo pemPair;
 
-        try(PEMParser pemParser=new PEMParser(pemReader)){
-            pemPair= (PrivateKeyInfo) pemParser.readObject();
+        try (PEMParser pemParser = new PEMParser(pemReader)) {
+            pemPair = (PrivateKeyInfo) pemParser.readObject();
         }
 
         PrivateKey privateKey = new JcaPEMKeyConverter().setProvider(BouncyCastleProvider.PROVIDER_NAME).getPrivateKey(pemPair);
         return privateKey;
+    }
+
+    //根据指定名称获取org
+    public TestOrg getTestOrgByName(String name) {
+        return testOrgs.get(name);
+    }
+
+    //获取指定类型的配置信息
+    public Properties getEndPointProperties(final String type, final String name) {
+        Properties ret = new Properties();
+
+        final String domainName = getDomainName(name);
+
+        //获取orderer的tls的server.crt证书
+        File cert = Paths.get("src\\test\\resources\\crypto-config\\", "ordererOrganizations".replace("orderer", type), domainName, type + "s", name, "tls/server.crt").toFile();
+
+        if (!cert.exists()) {
+            throw new RuntimeException(String.format("Missing cert file for: %s. Could not find at location: %s", name,
+                    cert.getAbsolutePath()));
+        }
+
+        File clientCert;
+        File clientKey;
+
+        if ("orderer".equals(type)) {
+            clientCert = Paths.get("src\\test\\resources\\crypto-config\\", "ordererOrganizations\\example.com\\users\\Admin@example.com\\tls\\client.crt").toFile();
+            clientKey = Paths.get("src\\test\\resources\\crypto-config\\", "ordererOrganizations\\example.com\\users\\Admin@example.com\\tls\\client.key").toFile();
+        } else {
+            clientCert = Paths.get("src\\test\\resources\\crypto-config\\", "peerOrganizations", domainName, "users\\User1@" + domainName, "tls\\client.crt").toFile();
+            clientKey = Paths.get("src\\test\\resources\\crypto-config\\", "peerOrganizations", domainName, "users\\User1@" + domainName, "tls\\client.key").toFile();
+        }
+
+        if (!clientCert.exists()) {
+            throw new RuntimeException(String.format("Missing  client cert file for: %s. Could not find at location: %s", name,
+                    clientCert.getAbsolutePath()));
+        }
+
+        if (!clientKey.exists()) {
+            throw new RuntimeException(String.format("Missing  client key file for: %s. Could not find at location: %s", name,
+                    clientKey.getAbsolutePath()));
+        }
+
+        ret.setProperty("clientCertFile", clientCert.getAbsolutePath());
+        ret.setProperty("clientKeyFile", clientKey.getAbsolutePath());
+
+        ret.setProperty("pemFile", cert.getAbsolutePath());
+
+        ret.setProperty("hostnameOverride", name);
+        ret.setProperty("sslProvider", "openSSL");
+        ret.setProperty("negotiationType", "TLS");
+
+        return ret;
+    }
+
+    //获取指定name的Orderer配置信息
+    public Properties getOrdererProperties(String name) {
+        return getEndPointProperties("orderer", name);
+    }
+
+    //获取指定name的Peer配置信息
+    public Properties getPeerProperties(String name){
+        return getEndPointProperties("peer",name);
+    }
+
+    //例如将orderer.example.com切成example.com
+    private String getDomainName(final String name) {
+        int dot = name.indexOf(".");
+        if (-1 == dot) {
+            return null;
+        } else {
+            return name.substring(dot + 1);
+        }
     }
 }

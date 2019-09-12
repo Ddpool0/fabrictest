@@ -5,6 +5,7 @@ import entity.TestEnrollment;
 import entity.TestOrg;
 import entity.TestUser;
 import org.apache.commons.io.IOUtils;
+import org.hyperledger.fabric.sdk.*;
 import org.hyperledger.fabric.sdk.exception.CryptoException;
 import org.hyperledger.fabric.sdk.security.CryptoSuite;
 import org.hyperledger.fabric_ca.sdk.HFCAClient;
@@ -18,12 +19,17 @@ import org.junit.Test;
 
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
 import java.net.MalformedURLException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.security.PrivateKey;
 import java.util.Collection;
+import java.util.EnumSet;
+import java.util.LinkedList;
+import java.util.Properties;
+import java.util.concurrent.TimeUnit;
 
 import static java.lang.String.format;
 import static org.junit.Assert.assertNotNull;
@@ -63,6 +69,92 @@ public class TestFabric {
 
         //设置用户，并注册与登记。
         enrollUsers(testOrgs);
+        //创建channel，peer加入，执行chaincode
+        runFabricTest();
+    }
+
+    public void runFabricTest() throws Exception {
+        //实例化fabric的Client
+        HFClient client = HFClient.createNewInstance();
+
+        //设置加密工具
+        client.setCryptoSuite(CryptoSuite.Factory.getCryptoSuite());
+
+        //获取指定name组织
+        TestOrg testOrg = testConfig.getTestOrgByName("peerOrg1");
+
+        //创建channel
+        Channel fooChannel = constructChannel("foo", client, testOrg);
+    }
+
+    /**
+     * 创建channel
+     *
+     * @param name    cahnnel名字
+     * @param client  HFClient
+     * @param testOrg org
+     * @return Channel实例
+     */
+    public Channel constructChannel(String name, HFClient client, TestOrg testOrg) throws Exception {
+
+        TestUser peerAdmin = testOrg.getPeerAdmin();
+        client.setUserContext(peerAdmin);
+
+        Collection<Orderer> orderers = new LinkedList<>();
+
+        for (String orderName : testOrg.getOrdererNames()) {
+            //获取fabric的orderer配置信息
+            Properties ordererProperties = testConfig.getOrdererProperties(orderName);
+
+            //设置grpc的keepAlive，避免timeout
+            ordererProperties.put("grpc.NettyChannelBuilderOption.keepAliveTime", new Object[]{5L, TimeUnit.MINUTES});
+            ordererProperties.put("grpc.NettyChannelBuilderOption.keepAliveTimeout", new Object[]{8L, TimeUnit.SECONDS});
+            ordererProperties.put("grpc.NettyChannelBuilderOption.keepAliveWithoutCalls", new Object[]{true});
+
+            //调用clien的newOrderer接口，表示一个fabric的orderer。
+            orderers.add(client.newOrderer(orderName, testOrg.getOrdererLocation(orderName), ordererProperties));
+        }
+
+        //选择第一个orderer创建channel
+        Orderer anOrderer = orderers.iterator().next();
+        orderers.remove(anOrderer);
+
+        //通道配置文件路径
+        String path = "src\\test\\resources\\" + name + ".tx";
+        ChannelConfiguration channelConfiguration = new ChannelConfiguration(new File(path));
+
+        //配置信息需要peerAdmin签名,生成Channel
+        Channel newChannel = client.newChannel(name, anOrderer, channelConfiguration, client.getChannelConfigurationSignature(channelConfiguration, peerAdmin));
+
+        System.out.println("Create channel " + name);
+
+        //将peer加入到channel中
+        for (String peerName : testOrg.getPeerNames()) {
+            //peer的连接地址
+            String peerLocation = testOrg.getPeerLocation(peerName);
+            //peer的配置信息
+            Properties peerProperties = testConfig.getPeerProperties(peerName);
+            if (null == peerProperties) {
+                peerProperties = new Properties();
+            }
+
+            peerProperties.put("grpc.NettyChannelBuilderOption.maxInboundMessageSize", 9000000);
+
+            //实例化Peer
+            Peer peer = client.newPeer(peerName, peerLocation, peerProperties);
+
+            //join实例化的peer到channel中，设置peer拥有的角色
+            newChannel.joinPeer(peer, Channel.PeerOptions.createPeerOptions().setPeerRoles(EnumSet.of(Peer.PeerRole.ENDORSING_PEER, Peer.PeerRole.LEDGER_QUERY, Peer.PeerRole.CHAINCODE_QUERY, Peer.PeerRole.EVENT_SOURCE)));
+
+            System.out.println("Peer " + peerName + "joined channel " + name);
+        }
+
+        //将剩下的orderer加入到channel中
+        for (Orderer orderer : orderers){
+            newChannel.addOrderer(orderer);
+        }
+
+        return newChannel.initialize();
     }
 
     //设置用户，并注册与登记。
@@ -111,16 +203,16 @@ public class TestFabric {
             String certificate = new String(IOUtils.toByteArray(new FileInputStream(certificateFile)), "UTF-8");
 
             //获取fabric生成的私钥
-            File baseSK=Paths.get("src\\test\\resources\\crypto-config\\peerOrganizations\\",testOrg.getDomainName(),format("\\users\\Admin@%s\\msp\\keystore",testOrg.getDomainName())).toFile();
-            File privateKeyFile=TestUtils.findFileSK(baseSK);
+            File baseSK = Paths.get("src\\test\\resources\\crypto-config\\peerOrganizations\\", testOrg.getDomainName(), format("\\users\\Admin@%s\\msp\\keystore", testOrg.getDomainName())).toFile();
+            File privateKeyFile = TestUtils.findFileSK(baseSK);
             //转换成PrivateKey类型
-            PrivateKey privateKey=TestUtils.getPrivateKeyFromBytes(IOUtils.toByteArray(new FileInputStream(privateKeyFile)));
+            PrivateKey privateKey = TestUtils.getPrivateKeyFromBytes(IOUtils.toByteArray(new FileInputStream(privateKeyFile)));
 
             //设置公私钥
-            peerOrgAdmin.setEnrollment(new TestEnrollment(privateKey,certificate));
+            peerOrgAdmin.setEnrollment(new TestEnrollment(privateKey, certificate));
             testOrg.setPeerAdmin(peerOrgAdmin);
         }
+        System.out.println("---------------------Enrolling Users end---------------------");
     }
-
 
 }

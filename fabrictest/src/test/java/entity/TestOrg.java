@@ -127,7 +127,7 @@ public class TestOrg {
 
     //获取所有Peer的name
     public Set<String> getPeerNames(){
-        return Collections.unmodifiableSet(ordererLocations.keySet());
+        return Collections.unmodifiableSet(peerLocations.keySet());
     }
 
     //获取指定name的peer的地址
