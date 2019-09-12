@@ -5,8 +5,10 @@ import entity.TestEnrollment;
 import entity.TestOrg;
 import entity.TestUser;
 import org.apache.commons.io.IOUtils;
+import org.hyperledger.fabric.protos.peer.Chaincode;
 import org.hyperledger.fabric.sdk.*;
 import org.hyperledger.fabric.sdk.exception.CryptoException;
+import org.hyperledger.fabric.sdk.exception.ProposalException;
 import org.hyperledger.fabric.sdk.security.CryptoSuite;
 import org.hyperledger.fabric_ca.sdk.HFCAClient;
 import org.hyperledger.fabric_ca.sdk.HFCAInfo;
@@ -25,11 +27,9 @@ import java.net.MalformedURLException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.security.PrivateKey;
-import java.util.Collection;
-import java.util.EnumSet;
-import java.util.LinkedList;
-import java.util.Properties;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
 
 import static java.lang.String.format;
 import static org.junit.Assert.assertNotNull;
@@ -85,6 +85,107 @@ public class TestFabric {
 
         //创建channel
         Channel fooChannel = constructChannel("foo", client, testOrg);
+
+        //安装链码，实例化链码，执行链码
+        runChannnel(client, fooChannel, true, testOrg, 0);
+    }
+
+    /**
+     * 安装链码，实例化链码，执行链码
+     *
+     * @param client
+     * @param channel
+     * @param installChaincode
+     * @param testOrg
+     * @param delta
+     */
+    public void runChannnel(HFClient client, Channel channel, boolean installChaincode, TestOrg testOrg, int delta) throws org.hyperledger.fabric.sdk.exception.InvalidArgumentException, ProposalException {
+
+        //Chaincode事件捕获类
+        class ChaincodeEventCapture {
+            final String handle;
+            final BlockEvent blockEvent;
+            final ChaincodeEvent chaincodeEvent;
+
+            public ChaincodeEventCapture(String handle, BlockEvent blockEvent, ChaincodeEvent chaincodeEvent) {
+                this.handle = handle;
+                this.blockEvent = blockEvent;
+                this.chaincodeEvent = chaincodeEvent;
+            }
+        }
+
+        Vector<ChaincodeEventCapture> chaincodeEvents = new Vector<>();
+
+        //获取channel的name
+        final String channelName = channel.getName();
+        boolean isFooChain = "foo".equals(channelName);
+        System.out.println("Running channel " + channelName);
+
+        //获取channel的Orderer节点实例集合
+        Collection<Orderer> orderers = channel.getOrderers();
+        //链码声明
+        final ChaincodeID chaincodeID;
+        //响应集合
+        Collection<ProposalResponse> responses;
+        //成功响应集合
+        Collection<ProposalResponse> successful = new LinkedList<>();
+        //失败响应集合
+        Collection<ProposalResponse> failed = new LinkedList<>();
+
+        //不明，事件监听注册
+        String chaincodeEventListenerHandle = channel.registerChaincodeEventListener(Pattern.compile(".*"),
+                Pattern.compile(Pattern.quote("event")),
+                (handle, blockEvent, chaincodeEvent) -> chaincodeEvents.add(new ChaincodeEventCapture(handle, blockEvent, chaincodeEvent))
+        );
+
+        //不明
+        if (!isFooChain) {
+            channel.unregisterChaincodeEventListener(chaincodeEventListenerHandle);
+            chaincodeEventListenerHandle = null;
+        }
+
+        //设置链码的name、version、path
+        ChaincodeID.Builder chaincodeIDBuilder = ChaincodeID.newBuilder().setName("example_cc_go").setVersion("1").setPath("github.com/example_cc");
+
+        //实例化chaincodeID
+        chaincodeID = chaincodeIDBuilder.build();
+
+        //安装链码
+        if (installChaincode) {
+
+            //设置客户端用户角色
+            client.setUserContext(testOrg.getPeerAdmin());
+
+            System.out.println("Creating install proposal");
+            //安装链码提议请求
+            InstallProposalRequest installProposalRequest = client.newInstallProposalRequest();
+            installProposalRequest.setChaincodeID(chaincodeID);
+
+            installProposalRequest.setChaincodeSourceLocation(Paths.get("src\\test\\resources", "\\chaincode\\sample1").toFile());
+            //不明，设置couchdb的meta信息
+            installProposalRequest.setChaincodeMetaInfLocation(new File("src\\test\\resources\\meta-infs\\end2endit"));
+
+            installProposalRequest.setChaincodeVersion("1");
+            installProposalRequest.setChaincodeLanguage(TransactionRequest.Type.GO_LANG);
+
+            System.out.println("Sending install proposal");
+
+            int numInstallProposal = 0;
+            Collection<Peer> peers = channel.getPeers();
+            numInstallProposal = numInstallProposal + peers.size();
+            responses = client.sendInstallProposal(installProposalRequest, peers);
+
+            for (ProposalResponse response : responses) {
+                if (response.getStatus() == ProposalResponse.Status.SUCCESS) {
+                    System.out.println("Successful install proposal response Txid: " + response.getTransactionID() + " from peer " + response.getPeer().getName());
+                    successful.add(response);
+                } else {
+                    failed.add(response);
+                }
+            }
+
+            System.out.println("Received " + numInstallProposal + " install proposal responses. Successful+verified: " + successful.size() + " . Failed: " + failed.size());
+        }
     }
 
     /**
@@ -146,18 +247,23 @@ public class TestFabric {
             //join实例化的peer到channel中，设置peer拥有的角色
             newChannel.joinPeer(peer, Channel.PeerOptions.createPeerOptions().setPeerRoles(EnumSet.of(Peer.PeerRole.ENDORSING_PEER, Peer.PeerRole.LEDGER_QUERY, Peer.PeerRole.CHAINCODE_QUERY, Peer.PeerRole.EVENT_SOURCE)));
 
-            System.out.println("Peer " + peerName + "joined channel " + name);
+            System.out.println("Peer " + peerName + " joined channel " + name);
         }
 
         //将剩下的orderer加入到channel中
-        for (Orderer orderer : orderers){
+        for (Orderer orderer : orderers) {
             newChannel.addOrderer(orderer);
         }
 
         return newChannel.initialize();
     }
 
-    //设置用户，并注册与登记。
+    /**
+     * 设置用户，并注册与登记。
+     *
+     * @param testOrgs
+     * @throws Exception
+     */
     public void enrollUsers(Collection<TestOrg> testOrgs) throws Exception {
         System.out.println("---------------------Enrolling Users begin---------------------");
         //为每一个组织下的用户注册并登记。
