@@ -7,6 +7,7 @@ import entity.TestUser;
 import org.apache.commons.io.IOUtils;
 import org.hyperledger.fabric.protos.peer.Chaincode;
 import org.hyperledger.fabric.sdk.*;
+import org.hyperledger.fabric.sdk.exception.ChaincodeEndorsementPolicyParseException;
 import org.hyperledger.fabric.sdk.exception.CryptoException;
 import org.hyperledger.fabric.sdk.exception.ProposalException;
 import org.hyperledger.fabric.sdk.security.CryptoSuite;
@@ -32,6 +33,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 
 import static java.lang.String.format;
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.junit.Assert.assertNotNull;
 
 public class TestFabric {
@@ -99,7 +101,7 @@ public class TestFabric {
      * @param testOrg
      * @param delta
      */
-    public void runChannnel(HFClient client, Channel channel, boolean installChaincode, TestOrg testOrg, int delta) throws org.hyperledger.fabric.sdk.exception.InvalidArgumentException, ProposalException {
+    public void runChannnel(HFClient client, Channel channel, boolean installChaincode, TestOrg testOrg, int delta) throws org.hyperledger.fabric.sdk.exception.InvalidArgumentException, ProposalException, IOException, ChaincodeEndorsementPolicyParseException {
 
         //Chaincode事件捕获类
         class ChaincodeEventCapture {
@@ -173,6 +175,7 @@ public class TestFabric {
             int numInstallProposal = 0;
             Collection<Peer> peers = channel.getPeers();
             numInstallProposal = numInstallProposal + peers.size();
+            //发送安装请求,安装到channel上的所有peer
             responses = client.sendInstallProposal(installProposalRequest, peers);
 
             for (ProposalResponse response : responses) {
@@ -186,6 +189,44 @@ public class TestFabric {
 
             System.out.println("Received " + numInstallProposal + " install proposal responses. Successful+verified: " + successful.size() + " . Failed: " + failed.size());
         }
+
+        System.out.println("Instantiate chaincode");
+        //实例化链码提议请求
+        InstantiateProposalRequest instantiateProposalReques = client.newInstantiationProposalRequest();
+        //提议等待时间
+        instantiateProposalReques.setProposalWaitTime(120000);
+        instantiateProposalReques.setChaincodeID(chaincodeID);
+        instantiateProposalReques.setChaincodeLanguage(TransactionRequest.Type.GO_LANG);
+        instantiateProposalReques.setFcn("init");
+        instantiateProposalReques.setArgs(new String[]{"a", "500", "b", "" + (200 + delta)});
+
+        Map<String, byte[]> tm = new HashMap<>();
+        tm.put("HyperLedgerFabric", "InstantiateProposalRequest:JavaSDK".getBytes(UTF_8));
+        tm.put("method", "InstantiateProposalRequest".getBytes(UTF_8));
+        instantiateProposalReques.setTransientMap(tm);
+
+        //背书策略
+        ChaincodeEndorsementPolicy chaincodeEndorsementPolicy = new ChaincodeEndorsementPolicy();
+        //配置背书策略
+        chaincodeEndorsementPolicy.fromYamlFile(new File("src\\test\\resources\\chaincodeendorsementpolicy.yaml"));
+        instantiateProposalReques.setChaincodeEndorsementPolicy(chaincodeEndorsementPolicy);
+
+        System.out.println("Sending instantiateProposalRequest to all peers with arguments: a and b set to 100 and " + (200 + delta) + " respectively");
+        successful.clear();
+        failed.clear();
+
+        responses = channel.sendInstantiationProposal(instantiateProposalReques, channel.getPeers());
+
+        for (ProposalResponse response : responses) {
+            if (response.isVerified()&&response.getStatus()==ProposalResponse.Status.SUCCESS){
+                successful.add(response);
+                System.out.println("Succesful instantiate proposal response Txid: "+response.getTransactionID()+" from peer "+response.getPeer().getName());
+            }else {
+                failed.add(response);
+            }
+        }
+
+        System.out.println("Received " + responses.size() + " instantiate proposal responses. Successful+verified: " + successful.size() + " . Failed: " + failed.size());
     }
 
     /**
